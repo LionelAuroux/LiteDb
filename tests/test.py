@@ -18,6 +18,13 @@ class Desc(db.Table):
         'desc_long': 'text'
         }
 
+class Stats(db.Table):
+    fields = {
+        'stats_id': 'integer primary key autoincrement',
+        'stats_val': 'integer not null',
+        'stats_num': 'integer not null',
+        }
+
 class LiteDB_Test(unittest.TestCase):
     def test_00(self):
         """
@@ -53,39 +60,53 @@ class LiteDB_Test(unittest.TestCase):
         with db.Session("Model.db") as s:
             if os.path.exists("Model.db"):
                 t1 = True
-                s.begin()
                 s.script(Desc.reset)
-                s.end()
         self.assertTrue(t1)
         # insert some data
         with db.Session("Model.db") as s:
-            s.begin()
             Desc.do_insert(s, [Desc(desc_name="test", desc_long="this is a test"),
                     Desc(desc_name="test2", desc_long="this is a test2"),
                     Desc(desc_name="test3", desc_long="this is a test3")])
-            s.end()
-            s.begin()
             Desc.do_insert(s, Desc(desc_name="test4", desc_long="this is a test4"))
-            s.end()
         # fetch
         with db.Session("Model.db") as s:
-            s.begin()
             s.init_query("select desc_id from Desc where desc_long like ?", ["this%"])
             self.assertEqual(len(list(s.fetch())), 4, "count of inserted rows are wrong")
-            s.end()
+        theid = None
         # update
         with db.Session("Model.db") as s:
-            s.begin()
             s.init_query("select * from Desc where desc_name=?", ["test2"])
             row = Desc(*s.fetch_one())
-            s.end()
             theid = row.entry.desc_id
             row.entry.desc_name = 'test_new'
-            s.begin()
             Desc.do_update(s, row)
-            s.end()
-            s.begin()
             s.init_query("select * from Desc where desc_id=?", [theid])
             row = Desc(*s.fetch_one())
-            s.end()
             self.assertEqual(row.entry.desc_name, 'test_new', "update failed")
+        # delete
+        with db.Session("Model.db") as s:
+            Desc.do_delete(s, {"desc_id": theid})
+            s.init_query("select * from Desc where desc_name=?", ["test_new"])
+            self.assertIs(s.fetch_one(), None, "row is not deleted")
+        # delete_if
+        with db.Session("Model.db") as s:
+            s.script(Stats.reset)
+            Stats.do_insert(s, [
+                Stats(stats_val=1, stats_num=22),
+                Stats(stats_val=2, stats_num=12),
+                Stats(stats_val=3, stats_num=20),
+                Stats(stats_val=4, stats_num=5),
+                Stats(stats_val=5, stats_num=30),
+                Stats(stats_val=6, stats_num=42),
+            ])
+            s.init_query("select stats_id from Stats")
+            self.assertEqual(len(s.fetch_all()), 6, "count of inserted rows are wrong")
+            Stats.do_delete_if(s, condition="stats_num > 20")
+            s.init_query("select stats_id from Stats")
+            self.assertEqual(len(s.fetch_all()), 3, "count of inserted rows are wrong")
+        # update_if
+        with db.Session("Model.db") as s:
+            Stats.do_update_if(s, fields="stats_num = stats_num + 1", condition="stats_num < 10")
+            s.init_query("select sum(stats_num) as S from Stats")
+            r = s.fetch_one()[0]
+            self.assertEqual(r, 38, "sum is'nt correct")

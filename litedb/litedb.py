@@ -10,7 +10,6 @@ class Session:
     def __enter__(self):
         self.con = sqlite3.connect(self.db)
         self.con.isolation_level = None
-        #self.con.set_trace_callback(print)
         self.cursor = None
         return self
 
@@ -20,25 +19,43 @@ class Session:
         self.con.close()
         return None
 
+    def trace_on(self):
+        self.con.set_trace_callback(print)
+
+    def trace_off(self):
+        self.con.set_trace_callback(None)
+
     def begin(self):
-        self.cursor = self.con.cursor()
+        print("TRANSACTION %s" % self.con.in_transaction)
+        self.con.isolation_level = ''
+        print("TRANSACTION %s" % self.con.in_transaction)
 
     def end(self):
-        self.cursor.close()
+        print("TRANSACTION %s" % self.con.in_transaction)
+        self.con.isolation_level = None
+        print("TRANSACTION %s" % self.con.in_transaction)
 
     def script(self, content):
-        self.cursor.executescript(content)
+        self.con.executescript(content)
     
     def sql(self, sql, param):
         if isinstance(param, Table) or 'insert ' not in sql:
-            self.cursor.execute(sql, vars(param.entry))
+            if type(param) is dict:
+                self.con.execute(sql, param)
+            else:
+                self.con.execute(sql, vars(param))
         elif isinstance(param, list):
             pl = param
             if isinstance(param[0], Table):
                 pl = [p.entry for p in param]
-            self.cursor.executemany(sql, pl)
+            self.con.executemany(sql, pl)
 
-    def init_query(self, sql, param):
+    def init_query(self, sql, param=None):
+        if self.cursor:
+            self.cursor.close()
+        self.cursor = self.con.cursor()
+        if param is None:
+            param = ()
         self.cursor.execute(sql, param)
 
     def fetch(self):
@@ -57,9 +74,12 @@ class Session:
     def commit(self):
         self.con.commit()
 
+    def rollback(self):
+        self.con.rollback()
 
 class MetaTable(type):
     def __new__(cls, clsname, supercls, attrd):
+        # TODO add 'constraints' to add list of extra line during create table
         if 'fields' not in attrd and clsname != "Table":
             raise TypeError("Table must have fields")
         elif clsname != "Table":
@@ -97,7 +117,6 @@ class MetaTable(type):
                 attrd['delete'] = MetaTable.delete(clsname, attrd['primary_key'])
                 attrd['delete_if'] = MetaTable.delete_if(clsname)
                 attrd['recordclass'] = rc(clsname, sorted(fields.keys()))
-                print(repr(attrd['recordclass']))
         return type.__new__(cls, clsname, supercls, attrd)
 
     def insert(t, lsfield):
@@ -122,7 +141,7 @@ class MetaTable(type):
     def delete_if(t):
         return "delete from " + t + " where {condition};"
 
-class Table(metaclass=MetaTable):
+class Table(dict, metaclass=MetaTable):
     def __init__(self, *arg, **kwarg):
         t = type(self)
         if len(arg):
@@ -137,6 +156,13 @@ class Table(metaclass=MetaTable):
 
     def __repr__(self):
         return repr(self.entry)
+
+    def __getitem__(self, k):
+        return self.entry[k]
+
+    @property
+    def __dict__(self):
+        return vars(self.entry)
     
     @classmethod
     def do_insert(cls, s, param):
@@ -145,3 +171,15 @@ class Table(metaclass=MetaTable):
     @classmethod
     def do_update(cls, s, param):
         s.sql(cls.update, param)
+
+    @classmethod
+    def do_update_if(cls, s, **param):
+        s.sql(cls.update_if.format(**param), {})
+
+    @classmethod
+    def do_delete(cls, s, theid):
+        s.sql(cls.delete, theid)
+
+    @classmethod
+    def do_delete_if(cls, s, **param):
+        s.sql(cls.delete_if.format(**param), {})
