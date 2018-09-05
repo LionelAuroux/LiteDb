@@ -25,6 +25,15 @@ class Stats(db.Table):
         'stats_num': 'integer not null',
         }
 
+class BiKey(db.Table):
+    fields = {
+        'bikey_txt': 'text not null',
+        'bikey_num': 'integer not null',
+        'bikey_num2': 'integer not null',
+        'bikey_val': 'integer not null',
+    }
+    constraints = ['constraint "BiKey have a primary key" primary key(bikey_txt, bikey_num, bikey_num2)']
+
 class LiteDB_Test(unittest.TestCase):
     def test_00(self):
         """
@@ -32,7 +41,7 @@ class LiteDB_Test(unittest.TestCase):
         """
         # create
         self.assertTrue(hasattr(Entity, 'create'))
-        cr = ("create table Entity (\n" +
+        cr = ("create table if not exists Entity (\n" +
             "ent_id integer primary key autoincrement,\n" +
             "ent_type integer not null\n)")
         self.assertEqual(Entity.create, cr, "Entity.create not formatted correctly")
@@ -49,8 +58,16 @@ class LiteDB_Test(unittest.TestCase):
         # delete
         self.assertTrue(hasattr(Entity, 'delete'))
         self.assertEqual(Entity.delete, "delete from Entity where ent_id = :ent_id;", "Entity.delete not formatted correctly")
+        # bikey
+        self.assertTrue(hasattr(BiKey, 'update'))
+        self.assertEqual(BiKey.update, "update BiKey set bikey_val = :bikey_val where bikey_txt = :bikey_txt and bikey_num = :bikey_num and bikey_num2 = :bikey_num2;", "BiKey.update not formatted correctly")
+        self.assertTrue(hasattr(BiKey, 'delete'))
+        self.assertEqual(BiKey.delete, "delete from BiKey where bikey_txt = :bikey_txt and bikey_num = :bikey_num and bikey_num2 = :bikey_num2;", "BiKey.delete not formatted correctly")
 
     def test_01(self):
+        """
+        Basic features
+        """
         import os
         # reset if any
         if os.path.exists("Model.db"):
@@ -110,3 +127,25 @@ class LiteDB_Test(unittest.TestCase):
             s.init_query("select sum(stats_num) as S from Stats")
             r = s.fetch_one()[0]
             self.assertEqual(r, 38, "sum is'nt correct")
+
+    def test_02(self):
+        """
+        Advanced features
+        """
+        # insert on BiKey
+        with db.Session("Model.db") as s:
+            s.script(BiKey.reset)
+            BiKey.do_insert(s, [
+                BiKey(bikey_txt='K1', bikey_num=1, bikey_num2=1, bikey_val=12),
+                BiKey(bikey_txt='K1', bikey_num=1, bikey_num2=2, bikey_val=28),
+                BiKey(bikey_txt='K1', bikey_num=2, bikey_num2=1, bikey_val=31),
+                BiKey(bikey_txt='K2', bikey_num=1, bikey_num2=1, bikey_val=49),
+                BiKey(bikey_txt='K2', bikey_num=1, bikey_num2=2, bikey_val=53),
+            ])
+            s.init_query("select * from BiKey;")
+            self.assertEqual(len(list(s.fetch())), 5, "count of inserted rows are wrong")
+        # delete
+        with db.Session("Model.db") as s:
+            BiKey.do_delete(s, {"bikey_txt": 'K1', 'bikey_num': 2, 'bikey_num2':1})
+            s.init_query("select * from BiKey where bikey_num=2")
+            self.assertIs(s.fetch_one(), None, "row is not deleted")

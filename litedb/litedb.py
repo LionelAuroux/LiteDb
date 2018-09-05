@@ -1,4 +1,5 @@
 import sqlite3
+import re
 from contextlib import contextmanager
 from recordclass import recordclass as rc
 
@@ -19,6 +20,12 @@ class Session:
         self.con.close()
         return None
 
+    def open(self):
+        self.__enter__()
+
+    def close(self):
+        self.__exit__()
+    
     def trace_on(self):
         self.con.set_trace_callback(print)
 
@@ -83,28 +90,37 @@ class MetaTable(type):
         if 'fields' not in attrd and clsname != "Table":
             raise TypeError("Table must have fields")
         elif clsname != "Table":
-            # search primary key
-            pkey = None
+            # search for simple primary key
+            lspkey = None
             for k, v in attrd['fields'].items():
                 if ' primary key' in v:
-                    if pkey:
-                        raise TypeError("Table must have only one primary key")
-                    pkey = k
-            if not pkey:
+                    if lspkey:
+                        raise TypeError("Table must have only one single primary key")
+                    lspkey = [k]
+            # handle composed primary key
+            if 'constraints' in attrd:
+                for c in attrd['constraints']:
+                    if 'primary key' in c:
+                        r = re.compile(r"^[^(]*\((\s*\S+\s*(?:,\s*\S+\s*)*)\).*$")
+                        lstxt = r.fullmatch(c).groups()[0]
+                        lspkey = list(map(str.strip, lstxt.split(',')))
+            if not lspkey:
                 raise TypeError("Table must have primary key")
-            attrd['primary_key'] = pkey
+            attrd['primary_key'] = lspkey
         fields = None
         if 'fields' in attrd:
             fields = attrd['fields']
         if 'init' not in attrd:
             attrd['init'] = True
-            create = "create table %s (\n" % clsname
+            create = "create table if not exists %s (\n" % clsname
             if fields:
+                lines = []
                 for idx, k in enumerate(sorted(fields.keys())):
                     v = fields[k]
-                    create += "%s %s" % (k, v)
-                    if idx < len(fields) - 1:
-                        create += ",\n"
+                    lines.append("%s %s" % (k, v))
+                if 'constraints' in attrd:
+                    lines.extend(attrd['constraints'])
+                create += ",\n".join(lines)
             create += "\n)"
             attrd['create'] = create
             attrd['reset'] = (
@@ -126,17 +142,23 @@ class MetaTable(type):
         # extract primary key
         f = []
         for n in lsfield:
-            if n != pkey:
+            if n not in pkey:
                 f.append(n)
+        conds = []
+        for pk in pkey:
+            conds.append("%s = :%s" % (pk, pk))
         return "update {table} set {fields} where {condition};".format(
-                table=t, fields=", ".join(["%s = :%s" % (v, v) for v in f]), condition="%s = :%s" % (pkey, pkey)
+                table=t, fields=", ".join(["%s = :%s" % (v, v) for v in f]), condition=" and ".join(conds)
             )
 
     def update_if(t):
         return "update " + t + " set {fields} where {condition};"
 
     def delete(t, pkey):
-        return "delete from {table} where {condition};".format(table=t, condition="%s = :%s" % (pkey, pkey))
+        conds = []
+        for pk in pkey:
+            conds.append("%s = :%s" % (pk, pk))
+        return "delete from {table} where {condition};".format(table=t, condition=" and ".join(conds))
 
     def delete_if(t):
         return "delete from " + t + " where {condition};"
